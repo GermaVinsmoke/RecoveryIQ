@@ -1,0 +1,11 @@
+data/*.sqlite
+data/*.sqlite-*
+services/garmin-sync/.venv/
+__pycache__/
+*.pyc
+apps/web/node_modules/
+apps/web/dist/
+apps/web/tsconfig.tsbuildinfo
+apps/api/recoveryiq-api
+.env
+.DS_Store
