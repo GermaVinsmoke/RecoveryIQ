@@ -1,4 +1,6 @@
 PYTHON := $(shell if [ -x services/garmin-sync/.venv/bin/python ]; then echo services/garmin-sync/.venv/bin/python; else echo python3; fi)
+MOCK_SLEEP ?= 0
+MOCK_SLEEP_FLAG := $(if $(filter 1 true yes on,$(MOCK_SLEEP)),--mock-sleep,)
 
 .PHONY: setup sync api web dev
 
@@ -11,7 +13,7 @@ setup:
 
 sync:
 	mkdir -p data
-	$(PYTHON) services/garmin-sync/sync.py --days 30
+	$(PYTHON) services/garmin-sync/sync.py --days 30 $(MOCK_SLEEP_FLAG)
 
 api:
 	cd apps/api && go mod download modernc.org/sqlite && go run .

@@ -28,15 +28,19 @@ make setup
 
 This installs Go modules, web dependencies, and a Python virtual environment for Garmin sync.
 
-## Seed mock data / run sync
+## Run sync
 
-One command to create `data/health.sqlite` with 30 days of data:
+One command to sync 30 days into `data/health.sqlite`:
 
 ```bash
 make sync
 ```
 
-If `GARMIN_EMAIL` and `GARMIN_PASSWORD` are not set, or Garmin login fails, this seeds realistic mock data.
+By default, days without Garmin sleep are left unchanged. To seed mock sleep for missing Garmin days:
+
+```bash
+make sync MOCK_SLEEP=1
+```
 
 ## Run the API
 
@@ -70,7 +74,7 @@ Web app runs at `http://localhost:5173` and proxies `/api` to the Go API.
 make dev
 ```
 
-This seeds data, then starts the API and web app together.
+This runs sync, then starts the API and web app together.
 
 ## Garmin credentials
 
@@ -101,7 +105,7 @@ You can also pass a one-time code directly:
 services/garmin-sync/.venv/bin/python services/garmin-sync/sync.py --days 30 --mfa-code 123456
 ```
 
-After Garmin login succeeds, the sync logs each Garmin sleep/recovery fetch and explains when it falls back to mock rows. For full Python tracebacks while debugging Garmin failures:
+After Garmin login succeeds, the sync logs each Garmin sleep/recovery fetch. Missing Garmin sleep is not replaced unless you pass `--mock-sleep` or run `make sync MOCK_SLEEP=1`. For full Python tracebacks while debugging Garmin failures:
 
 ```bash
 GARMIN_DEBUG=1 services/garmin-sync/.venv/bin/python services/garmin-sync/sync.py --days 3

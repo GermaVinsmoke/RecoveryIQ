@@ -3,8 +3,8 @@
 
 This script is intentionally isolated from the Go API because Garmin Connect
 access is unofficial and best handled through python-garminconnect. If Garmin
-credentials are missing or any login/fetch step fails, the script falls back to
-realistic mock data so the local app remains usable.
+credentials are missing or any login/fetch step fails, the script can seed
+realistic mock sleep data when explicitly requested with --mock-sleep.
 """
 from __future__ import annotations
 
@@ -514,7 +514,7 @@ def try_garmin_client(mfa_code: Optional[str] = None) -> Optional[Any]:
     password = dotenv.get("GARMIN_PASSWORD")
     mfa_code = mfa_code or dotenv.get("GARMIN_MFA_CODE")
     if not email or not password:
-        print(f"GARMIN_EMAIL/GARMIN_PASSWORD not found in {DOTENV_PATH}; using mock data.")
+        print(f"GARMIN_EMAIL/GARMIN_PASSWORD not found in {DOTENV_PATH}; Garmin fetch disabled.")
         return None
     try:
         from garminconnect import Garmin  # type: ignore
@@ -529,7 +529,7 @@ def try_garmin_client(mfa_code: Optional[str] = None) -> Optional[Any]:
         print("Garmin login succeeded.")
         return client
     except Exception as exc:
-        print(f"Garmin login failed; using mock data. Reason: {exc}")
+        print(f"Garmin login failed; Garmin fetch disabled. Reason: {exc}")
         return None
 
 
@@ -546,7 +546,7 @@ def fetch_garmin_day(client: Any, day: date) -> tuple[Optional[Dict[str, Any]], 
         if isinstance(sleep_payload, dict):
             sleep_row = extract_sleep(day, sleep_payload)
             if sleep_row is None:
-                print(f"[garmin] {day_s}: could not normalize sleep payload; using mock sleep. {explain_sleep_payload(sleep_payload)}")
+                print(f"[garmin] {day_s}: could not normalize sleep payload. {explain_sleep_payload(sleep_payload)}")
             else:
                 naps = extract_naps(day, sleep_payload, int(sleep_row.get("nap_minutes") or 0))
                 print(
@@ -556,10 +556,10 @@ def fetch_garmin_day(client: Any, day: date) -> tuple[Optional[Dict[str, Any]], 
                     f"window={sleep_row.get('sleep_start')} -> {sleep_row.get('sleep_end')}."
                 )
         else:
-            print(f"[garmin] {day_s}: unexpected sleep payload type {type(sleep_payload).__name__}; using mock sleep.")
+            print(f"[garmin] {day_s}: unexpected sleep payload type {type(sleep_payload).__name__}; no Garmin sleep row.")
     except Exception as exc:
         log_exception(f"{day_s}: sleep fetch", exc)
-        print(f"[garmin] {day_s}: using mock sleep because Garmin sleep fetch failed.")
+        print(f"[garmin] {day_s}: no Garmin sleep row because sleep fetch failed.")
 
     stats: Dict[str, Any] = {}
     print(f"[garmin] {day_s}: fetching recovery stats...")
@@ -794,31 +794,19 @@ def adjusted_confidence(base: str, chronic_deficit: int, recovery_score_value: i
 
 def compute_inertia_minutes(decayed_debt: int, last_night_sleep_minutes: int) -> int:
     inertia = 60
-    if decayed_debt > 300:
-        inertia = 120
-    elif decayed_debt > 180:
+    if decayed_debt > 180 or last_night_sleep_minutes < 390:
         inertia = 90
-    if last_night_sleep_minutes < 390:
-        inertia = max(inertia, 90)
-    return int(min(120, inertia))
+    return int(min(90, inertia))
 
 
 def compute_dynamic_wake_span_minutes(decayed_debt: int, recovery_score_value: int, chronic_deficit: int) -> int:
     """Estimated wake span before target bedtime.
 
-    Base phase is later than the original MVP (17h after wake), then moves
-    earlier with high pressure. This is a product heuristic calibrated against a
-    RISE-like example, not a circadian/medical model.
+    Base phase is calibrated to the user's RISE-like example: melatonin window
+    starts about 16h29m after wake. This is a product heuristic, not a
+    circadian/medical model.
     """
-    span = 17 * 60
-    if decayed_debt > 300:
-        span -= 60
-    elif decayed_debt > 180:
-        span -= 30
-    if recovery_score_value < 50:
-        span -= 30
-    if chronic_deficit > 45:
-        span -= 30
+    span = 16 * 60 + 29
     return int(clamp(span, 15 * 60 + 45, 17 * 60 + 30))
 
 
@@ -929,15 +917,15 @@ def recompute_energy(conn: sqlite3.Connection) -> None:
 
         groggy_minutes = compute_inertia_minutes(decayed_debt, int(row["total_sleep_minutes"] or 0))
 
-        morning_start = wake + timedelta(hours=2, minutes=45)
-        morning_end = wake + timedelta(hours=5, minutes=55)
-        afternoon_start = wake + timedelta(hours=8)
-        afternoon_end = wake + timedelta(hours=10, minutes=5)
-        evening_start = wake + timedelta(hours=12, minutes=10)
-        evening_end = wake + timedelta(hours=15, minutes=2)
+        morning_start = wake + timedelta(hours=1, minutes=53)
+        morning_end = wake + timedelta(hours=5, minutes=30)
+        afternoon_start = wake + timedelta(hours=7, minutes=33)
+        afternoon_end = wake + timedelta(hours=9, minutes=35)
+        evening_start = wake + timedelta(hours=11, minutes=38)
+        evening_end = wake + timedelta(hours=14, minutes=24)
 
         target_bedtime = wake + timedelta(minutes=dynamic_wake_span)
-        wind_down = target_bedtime - timedelta(hours=1, minutes=34)
+        wind_down = target_bedtime - timedelta(hours=1, minutes=45)
         mel_start = target_bedtime
         mel_end = target_bedtime + timedelta(hours=1)
         confidence = adjusted_confidence(window_confidence(conn, day_s), chronic_deficit, recovery_score_value)
@@ -1045,6 +1033,7 @@ def main() -> None:
     parser.add_argument("--date", default=date.today().isoformat(), help="End date, YYYY-MM-DD")
     parser.add_argument("--days", type=int, default=30, help="Number of days ending on --date")
     parser.add_argument("--mfa-code", help="Optional one-time Garmin MFA code. If omitted in a terminal, you will be prompted when Garmin asks for MFA.")
+    parser.add_argument("--mock-sleep", action="store_true", help="Seed mock sleep for days with no Garmin sleep. By default, missing Garmin sleep is left untouched.")
     args = parser.parse_args()
 
     end_day = date.fromisoformat(args.date)
@@ -1068,9 +1057,13 @@ def main() -> None:
         if client is not None:
             sleep_row, recovery_row, naps = fetch_garmin_day(client, day)
 
+        wrote_sleep = False
         if sleep_row is None:
-            sleep_row = mock_sleep
-            naps = mock_naps
+            if args.mock_sleep:
+                sleep_row = mock_sleep
+                naps = mock_naps
+            else:
+                print(f"[sync] {day.isoformat()}: no Garmin sleep; leaving sleep data unchanged (use --mock-sleep to seed mock sleep).")
         else:
             garmin_count += 1
 
@@ -1083,10 +1076,13 @@ def main() -> None:
                     recovery_row[key] = value
             recovery_row["source"] = "garmin"
 
-        upsert_sleep(conn, sleep_row)
-        replace_naps(conn, day.isoformat(), naps)
+        if sleep_row is not None:
+            upsert_sleep(conn, sleep_row)
+            replace_naps(conn, day.isoformat(), naps)
+            wrote_sleep = True
         upsert_recovery(conn, recovery_row)
-        inserted += 1
+        if wrote_sleep:
+            inserted += 1
 
     conn.commit()
     recompute_energy(conn)
